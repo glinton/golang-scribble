@@ -7,13 +7,11 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/jcelliott/lumber"
 )
-
-// Version is the current version of the project
-const Version = "1.0.4"
 
 type (
 
@@ -46,8 +44,11 @@ type Options struct {
 // returns a *Driver to then use for interacting with the database
 func New(dir string, options *Options) (*Driver, error) {
 
-	//
+	// ensure root is not specified (delete could wipe their drive/files) (filepath.Clean won't end in a '/')
 	dir = filepath.Clean(dir)
+	if dir == "/" || dir == "C:\\" || dir == "~" || (strings.HasPrefix(dir, "/home/") && strings.Count(dir, "/") <= 2) {
+		return nil, fmt.Errorf("Missing or unsafe filepath - no place to create db!")
+	}
 
 	// create default options
 	opts := Options{}
@@ -91,7 +92,7 @@ func (d *Driver) Write(collection, resource string, v interface{}) error {
 
 	// ensure there is a resource (name) to save record as
 	if resource == "" {
-		return fmt.Errorf("Missing resource - unable to save record (no name)!")
+		return fmt.Errorf("Missing resource - unable to save record - no name!")
 	}
 
 	mutex := d.getOrCreateMutex(collection)
@@ -100,7 +101,7 @@ func (d *Driver) Write(collection, resource string, v interface{}) error {
 
 	//
 	dir := filepath.Join(d.dir, collection)
-	fnlPath := filepath.Join(dir, resource+".json")
+	fnlPath := filepath.Join(dir, resource)
 	tmpPath := fnlPath + ".tmp"
 
 	// create collection directory
@@ -126,14 +127,14 @@ func (d *Driver) Write(collection, resource string, v interface{}) error {
 // Read a record from the database
 func (d *Driver) Read(collection, resource string, v interface{}) error {
 
-	// ensure there is a place to save record
+	// ensure there is a place to read record
 	if collection == "" {
-		return fmt.Errorf("Missing collection - no place to save record!")
+		return fmt.Errorf("Missing collection - no place to read record!")
 	}
 
-	// ensure there is a resource (name) to save record as
+	// ensure there is a resource (name) to read record from
 	if resource == "" {
-		return fmt.Errorf("Missing resource - unable to save record (no name)!")
+		return fmt.Errorf("Missing resource - unable to read record - no name!")
 	}
 
 	//
@@ -145,7 +146,7 @@ func (d *Driver) Read(collection, resource string, v interface{}) error {
 	}
 
 	// read record from database
-	b, err := ioutil.ReadFile(record + ".json")
+	b, err := ioutil.ReadFile(record)
 	if err != nil {
 		return err
 	}
@@ -160,7 +161,7 @@ func (d *Driver) ReadAll(collection string) ([]string, error) {
 
 	// ensure there is a collection to read
 	if collection == "" {
-		return nil, fmt.Errorf("Missing collection - unable to record location!")
+		return nil, fmt.Errorf("Missing collection - unable to read location!")
 	}
 
 	//
@@ -168,7 +169,7 @@ func (d *Driver) ReadAll(collection string) ([]string, error) {
 
 	// check to see if collection (directory) exists
 	if _, err := stat(dir); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Directory '%s' does not exist - %s!", dir, err.Error())
 	}
 
 	// read all the files in the transaction.Collection; an error here just means
@@ -180,8 +181,8 @@ func (d *Driver) ReadAll(collection string) ([]string, error) {
 
 	// iterate over each of the files, attempting to read the file. If successful
 	// append the files to the collection of read files
-	for _, file := range files {
-		b, err := ioutil.ReadFile(filepath.Join(dir, file.Name()))
+	for i := range files {
+		b, err := ioutil.ReadFile(filepath.Join(dir, files[i].Name()))
 		if err != nil {
 			return nil, err
 		}
@@ -194,9 +195,60 @@ func (d *Driver) ReadAll(collection string) ([]string, error) {
 	return records, nil
 }
 
+// ReadAllMap records from a collection; this is returned as a string map of strings
+// because the resource was a string, and there is no way of knowing what type
+// the record is.
+func (d *Driver) ReadAllMap(collection string) (map[string]string, error) {
+
+	// ensure there is a collection to read
+	if collection == "" {
+		return nil, fmt.Errorf("Missing collection - unable to read location!")
+	}
+
+	//
+	dir := filepath.Join(d.dir, collection)
+
+	// check to see if collection (directory) exists
+	if _, err := stat(dir); err != nil {
+		return nil, fmt.Errorf("Directory '%s' does not exist - %s!", dir, err.Error())
+	}
+
+	// read all the files in the transaction.Collection; an error here just means
+	// the collection is either empty or doesn't exist
+	files, _ := ioutil.ReadDir(dir)
+
+	// the files read from the database (map[string] because the resource is a string)
+	var records = make(map[string]string)
+
+	// iterate over each of the files, attempting to read the file. If successful
+	// append the files to the collection of read files
+	for i := range files {
+		b, err := ioutil.ReadFile(filepath.Join(dir, files[i].Name()))
+		if err != nil {
+			return nil, err
+		}
+
+		// append read file
+		// records = append(records, string(b))
+		records[files[i].Name()] = string(b)
+	}
+
+	// unmarhsal the read files as a comma delimeted byte array
+	return records, nil
+}
+
 // Delete locks that database and then attempts to remove the collection/resource
 // specified by [path]
 func (d *Driver) Delete(collection, resource string) error {
+
+	// ensure there is a place to delete record. it's fine if a resource is blank,
+	// this would be a deleteAll equivalent
+	resource = filepath.Clean(resource)
+	collection = filepath.Clean(collection)
+	if collection == "" || collection == "/" || collection == "." {
+		return fmt.Errorf("Missing collection - no place to delete record!")
+	}
+
 	path := filepath.Join(collection, resource)
 	//
 	mutex := d.getOrCreateMutex(path)
@@ -210,29 +262,22 @@ func (d *Driver) Delete(collection, resource string) error {
 
 	// if fi is nil or error is not nil return
 	case fi == nil, err != nil:
-		return fmt.Errorf("Unable to find file or directory named %v\n", path)
+		if strings.Contains(err.Error(), "no such file") {
+			return nil
+		}
+		return fmt.Errorf("Unable to stat %s - %s!", dir, err.Error())
 
-	// remove directory and all contents
-	case fi.Mode().IsDir():
+	// remove file or directory and all contents
+	case fi.Mode().IsDir(), fi.Mode().IsRegular():
 		return os.RemoveAll(dir)
-
-	// remove file
-	case fi.Mode().IsRegular():
-		return os.RemoveAll(dir + ".json")
 	}
 
 	return nil
 }
 
-//
-func stat(path string) (fi os.FileInfo, err error) {
-
-	// check for dir, if path isn't a directory check to see if it's a file
-	if fi, err = os.Stat(path); os.IsNotExist(err) {
-		fi, err = os.Stat(path + ".json")
-	}
-
-	return
+// stat checks for dir, if path isn't a directory check to see if it's a file
+func stat(path string) (os.FileInfo, error) {
+	return os.Stat(path)
 }
 
 // getOrCreateMutex creates a new collection specific mutex any time a collection
