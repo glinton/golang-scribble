@@ -141,7 +141,7 @@ func (d *Driver) Read(collection, resource string, v interface{}) error {
 	record := filepath.Join(d.dir, collection, resource)
 
 	// check to see if file exists
-	if _, err := stat(record); err != nil {
+	if _, err := os.Stat(record); err != nil {
 		return err
 	}
 
@@ -168,7 +168,7 @@ func (d *Driver) ReadAll(collection string) ([]string, error) {
 	dir := filepath.Join(d.dir, collection)
 
 	// check to see if collection (directory) exists
-	if _, err := stat(dir); err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		return nil, fmt.Errorf("Directory '%s' does not exist - %s!", dir, err.Error())
 	}
 
@@ -209,7 +209,7 @@ func (d *Driver) ReadAllMap(collection string) (map[string]string, error) {
 	dir := filepath.Join(d.dir, collection)
 
 	// check to see if collection (directory) exists
-	if _, err := stat(dir); err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		return nil, fmt.Errorf("Directory '%s' does not exist - %s!", dir, err.Error())
 	}
 
@@ -258,7 +258,7 @@ func (d *Driver) Delete(collection, resource string) error {
 	//
 	dir := filepath.Join(d.dir, path)
 
-	switch fi, err := stat(dir); {
+	switch fi, err := os.Stat(dir); {
 
 	// if fi is nil or error is not nil return
 	case fi == nil, err != nil:
@@ -273,11 +273,6 @@ func (d *Driver) Delete(collection, resource string) error {
 	}
 
 	return nil
-}
-
-// stat checks for dir, if path isn't a directory check to see if it's a file
-func stat(path string) (os.FileInfo, error) {
-	return os.Stat(path)
 }
 
 // getOrCreateMutex creates a new collection specific mutex any time a collection
